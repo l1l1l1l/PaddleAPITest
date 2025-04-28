@@ -9,7 +9,7 @@ import inspect
 import torch
 import copy
 
-USE_CACHED_NUMPY = False
+USE_CACHED_NUMPY = True
 cached_numpy = {}
 
 not_zero_apis = [

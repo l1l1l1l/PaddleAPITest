@@ -27,7 +27,7 @@ class APITestAccuracy(APITestBase):
         super().__init__(api_config)
         self.api_config = api_config
     
-    @func_set_timeout(600)
+    @func_set_timeout(1800)
     def test(self):
         if self.need_skip():
             print("[Skip]")

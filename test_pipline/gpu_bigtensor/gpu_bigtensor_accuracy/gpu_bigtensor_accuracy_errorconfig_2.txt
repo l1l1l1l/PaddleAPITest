@@ -1,0 +1,24 @@
+paddle.isfinite(Tensor([252645135, 17],"float32"), )
+paddle.isfinite(Tensor([25264514, 17, 10],"int32"), )
+paddle.isfinite(Tensor([289, 280, 376, 25, 3],"float32"), )
+paddle.isfinite(Tensor([35791395, 3, 4, 5],"float64"), )
+paddle.isfinite(Tensor([4, 1834166, 311],"float32"), )
+paddle.isfinite(Tensor([4, 20228, 376, 25, 3],"float32"), )
+paddle.isfinite(Tensor([4, 280, 27164, 25, 3],"float32"), )
+paddle.isfinite(Tensor([4, 280, 376, 1807, 3],"float32"), )
+paddle.isfinite(Tensor([4, 280, 376, 25, 217],"float32"), )
+paddle.isfinite(Tensor([4, 94, 6068355],"float32"), )
+paddle.isfinite(Tensor([71582789, 3, 4, 5],"float16"), )
+paddle.isfinite(Tensor([78050, 94, 311],"float32"), )
+paddle.isfinite(Tensor([8, 17, 5, 6, 1052689],"float16"), )
+paddle.isfinite(Tensor([8, 17, 5, 902305, 7],"float16"), )
+paddle.isfinite(Tensor([8, 17, 751921, 6, 7],"float16"), )
+paddle.isfinite(Tensor([8, 2556529, 5, 6, 7],"float16"), )
+paddle.isfinite(x=Tensor([4294967297],"float16"), )
+paddle.isinf(Tensor([10, 214748365],"float64"), )
+
+并发负载不均衡，需要均衡一下
+别人用机器，我们得让出来
+不是1个测试集，需要两次测试
+测试完，需要剔除问题case，汇总去重
+如果测试过程中卡死，需要杀一下进程啥的

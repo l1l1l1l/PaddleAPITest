@@ -12,6 +12,7 @@ import argparse
 import subprocess
 import os
 from datetime import datetime
+import torch
 
 DIR_PATH = os.path.dirname(os.path.realpath(__file__))[0:os.path.dirname(os.path.realpath(__file__)).index("PaddleAPITest")+13]
 
@@ -92,6 +93,9 @@ def main():
         case.clear_tensor()
         del case
         del api_config
+        torch.cuda.empty_cache()
+        paddle.device.cuda.empty_cache()
+
     elif options.api_config_file != "":
         try:
             checkpoint_r = open(DIR_PATH+"/tester/api_config/test_log/checkpoint.txt", "r")
@@ -126,6 +130,8 @@ def main():
             case.clear_tensor()
             del case
             del api_config
+            torch.cuda.empty_cache()
+            paddle.device.cuda.empty_cache()
 
 
 
