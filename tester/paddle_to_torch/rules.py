@@ -1527,7 +1527,7 @@ class DiagRule(BaseRule):
             core = "result = x.diag(diagonal=offset)"
         post = """
 if x.ndim == 1 and padding_value != 0:
-    padding_value = torch.tensor(padding_value, dtype=x.dtype)
+    padding_value = torch.tensor(padding_value, dtype=torch.float32)
     diag_mask = torch.diag(torch.ones_like(x), diagonal=offset)
     result = torch.where(diag_mask.bool(), result, padding_value)
 """
