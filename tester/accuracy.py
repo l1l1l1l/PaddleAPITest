@@ -238,6 +238,7 @@ class APITestAccuracy(APITestBase):
                 return False
             return True
 
+        # Forward output check:
         if isinstance(paddle_output, paddle.Tensor):
             if isinstance(torch_output, torch.Tensor):
                 if not compare_paddle_and_torch(paddle_output, torch_output):
@@ -255,6 +256,8 @@ class APITestAccuracy(APITestBase):
                 torch_output = torch_output.values
                 if not compare_paddle_and_torch(paddle_output, torch_output):
                     return
+            elif (paddle_out is None or paddle_out.size == 0) and torch_output is None:
+                pass
             else:
                 print("[accuracy error]", self.api_config.config, "\n[output type diff error1], ", type(torch_output), flush=True)
                 write_to_log("accuracy_error", self.api_config.config)
@@ -282,6 +285,8 @@ class APITestAccuracy(APITestBase):
                         print("[accuracy error]", self.api_config.config, "\n[output type diff error4]", flush=True)
                         write_to_log("accuracy_error", self.api_config.config)
                         return
+                elif (paddle_item is None or paddle_item.size == 0) and torch_item is None:
+                    continue
                 elif not isinstance(paddle_item, paddle.Tensor):
                     print("[not compare]", paddle_item, torch_item, flush=True)
                     write_to_log("accuracy_error", self.api_config.config)
@@ -294,6 +299,8 @@ class APITestAccuracy(APITestBase):
                     if not compare_paddle_and_torch(paddle_item, torch_item):
                         return
 
+        # Forward check now pass. 
+        # Then do paddle backward and backward result check.
         if torch_grad_success:
             self.is_backward = True
             try:
@@ -330,10 +337,13 @@ class APITestAccuracy(APITestBase):
 
             paddle_out_grads, torch_out_grads = process_grad_output(self.api_config, paddle_out_grads, torch_out_grads)
 
+            # Backward output check:
             if isinstance(paddle_out_grads, paddle.Tensor):
                 if isinstance(torch_out_grads, torch.Tensor):
                     if not compare_paddle_and_torch(paddle_out_grads, torch_out_grads):
                         return
+                elif (paddle_out_grads is None or paddle_out_grads.size == 0) and torch_out_grads is None:
+                    pass
                 else:
                     print("[accuracy error] backward", self.api_config.config, "\n[output type diff error1], ", type(torch_out_grads), flush=True)
                     write_to_log("accuracy_error", self.api_config.config)
@@ -351,6 +361,8 @@ class APITestAccuracy(APITestBase):
                 for paddle_item, torch_item in zip(paddle_out_grads, torch_out_grads):
                     if isinstance(paddle_item, int):
                         self.np_assert_accuracy(numpy.array(paddle_item), numpy.array(torch_item), atol=self.atol, rtol=self.rtol)
+                    elif (paddle_item is None or paddle_item.size == 0) and torch_item is None:
+                        continue
                     elif not isinstance(paddle_item, paddle.Tensor):
                         print("[not compare]", paddle_item, torch_item, flush=True)
                         write_to_log("accuracy_error", self.api_config.config)
