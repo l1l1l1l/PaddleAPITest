@@ -7,12 +7,15 @@ import argparse
 from datetime import datetime
 
 import paddle
-import torch
 
-from tester import (APIConfig, APITestAccuracy, APITestAccuracyStable,
-                    APITestCINNVSDygraph, APITestPaddleGPUPerformance,
-                    APITestPaddleOnly, APITestPaddleTorchGPUPerformance,
-                    APITestTorchGPUPerformance, APITestCustomDeviceVSCPU, set_cfg)
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    TORCH_AVAILABLE = False
+
+from tester import (APIConfig, set_cfg)
 from tester.api_config.log_writer import (close_process_files, read_log,
                                           write_to_log)
 
@@ -103,27 +106,45 @@ def main():
     if options.test_cpu:
         paddle.device.set_device("cpu")
 
-    test_class = APITestAccuracy
+    test_class = None
     if options.paddle_only:
+        from tester import APITestPaddleOnly
         test_class = APITestPaddleOnly
     elif options.paddle_cinn:
+        from tester import APITestCINNVSDygraph
         test_class = APITestCINNVSDygraph
     elif options.accuracy:
+        from tester import APITestAccuracy
         test_class = APITestAccuracy
     elif options.paddle_gpu_performance:
         paddle.framework.set_flags({"FLAGS_use_system_allocator": False})
         paddle.framework.set_flags({"FLAGS_share_tensor_for_grad_tensor_holder": True})
+        from tester import APITestPaddleGPUPerformance
         test_class = APITestPaddleGPUPerformance
     elif options.torch_gpu_performance:
+        if not TORCH_AVAILABLE:
+            print("Error: torch is not available but --torch_gpu_performance was specified")
+            return
+        from tester import APITestTorchGPUPerformance
         test_class = APITestTorchGPUPerformance
     elif options.paddle_torch_gpu_performance:
+        if not TORCH_AVAILABLE:
+            print("Error: torch is not available but --paddle_torch_gpu_performance was specified")
+            return
         paddle.set_flags({"FLAGS_use_system_allocator": False})
         paddle.framework.set_flags({"FLAGS_share_tensor_for_grad_tensor_holder": True})
+        from tester import APITestPaddleTorchGPUPerformance
         test_class = APITestPaddleTorchGPUPerformance
     elif options.accuracy_stable:
+        from tester import APITestAccuracyStable
         test_class = APITestAccuracyStable
     elif options.paddle_custom_device:
+        from tester import APITestCustomDeviceVSCPU
         test_class = APITestCustomDeviceVSCPU
+    else:
+        # 默认使用accuracy测试
+        from tester import APITestAccuracy
+        test_class = APITestAccuracy
 
     if options.api_config != "":
         options.api_config = options.api_config.strip()
@@ -152,7 +173,8 @@ def main():
             and not options.torch_gpu_performance
             and not options.paddle_torch_gpu_performance
         ):
-            torch.cuda.empty_cache()
+            if TORCH_AVAILABLE:
+                torch.cuda.empty_cache()
             paddle.device.cuda.empty_cache()
     elif options.api_config_file != "":
         finish_configs = read_log("checkpoint")
@@ -197,7 +219,8 @@ def main():
                 and not options.torch_gpu_performance
                 and not options.paddle_torch_gpu_performance
             ):
-                torch.cuda.empty_cache()
+                if TORCH_AVAILABLE:
+                    torch.cuda.empty_cache()
                 paddle.device.cuda.empty_cache()
 
         # elif options.api_config_file != "":

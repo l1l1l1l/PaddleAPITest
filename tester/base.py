@@ -3,7 +3,15 @@ import inspect
 
 import numpy
 import paddle
-import torch
+
+# 尝试导入torch，如果失败则设置torch为None
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    TORCH_AVAILABLE = False
+
 import yaml
 
 from .api_config import USE_CACHED_NUMPY, TensorConfig, cached_numpy
@@ -47,8 +55,9 @@ class APITestBase:
     def __init__(self, api_config):
         self.api_config = api_config
         self.outputs_grad_numpy = []
-        torch.set_num_threads(8)
-        torch.set_printoptions(threshold=100, linewidth=120)
+        if TORCH_AVAILABLE:
+            torch.set_num_threads(8)
+            torch.set_printoptions(threshold=100, linewidth=120)
 
     def need_skip(self, paddle_only=False):
         # not support

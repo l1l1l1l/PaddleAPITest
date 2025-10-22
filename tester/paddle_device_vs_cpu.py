@@ -7,8 +7,11 @@ class APITestCustomDeviceVSCPU(APITestBase):
     def __init__(self, api_config, **kwargs):
         super().__init__(api_config)
         self.test_amp = kwargs.get("test_amp", False)
-        self.custom_device_type = self._get_first_custom_device_type()
-        self.custom_device_id = 0
+        if self.check_custom_device_available():
+            self.custom_device_type = self._get_first_custom_device_type()
+            self.custom_device_id = 0
+        if self.check_xpu_available():
+            self.xpu_device_id = kwargs.get("xpu_device_id", 0)
         
     def _get_first_custom_device_type(self):
         try:
@@ -26,12 +29,21 @@ class APITestCustomDeviceVSCPU(APITestBase):
             return self.custom_device_type in custom_device_types
         except Exception:
             return False
-    
+
+    def check_xpu_available(self):
+        """Check if XPU is available"""
+        if paddle.device.is_compiled_with_xpu():
+            return True
+        else:
+            return False
+
     def run_on_device(self, device_type, device_id=0):
         """Run API on specified device"""
         try:
             if device_type == "cpu":
                 paddle.set_device("cpu")
+            elif device_type == "xpu":
+                paddle.set_device(f"xpu:{device_id}")
             else:
                 paddle.set_device(f"{device_type}:{device_id}")
 
@@ -67,6 +79,28 @@ class APITestCustomDeviceVSCPU(APITestBase):
             print(f"[{device_type} error]", self.api_config.config, "\n", str(err), flush=True)
             return None, None
     
+    def _compare_single_tensor(self, cpu_tensor, custom_tensor, tensor_name=""):
+        try:
+            # bfloat16
+            if cpu_tensor.dtype == paddle.bfloat16:
+                cpu_tensor = paddle.cast(cpu_tensor, dtype="float32")
+            if custom_tensor.dtype == paddle.bfloat16:
+                custom_tensor = paddle.cast(custom_tensor, dtype="float32")
+            
+            # Convert CustomDevice tensor to CPU
+            custom_tensor_cpu = custom_tensor.cpu()
+            
+            self.np_assert_accuracy(cpu_tensor.numpy(), custom_tensor_cpu.numpy(), 1e-2, 1e-2)
+            return True
+            
+        except Exception as err:
+            error_msg = f"[accuracy error]"
+            if tensor_name:
+                error_msg += f" {tensor_name}"
+            error_msg += f"\n{self.api_config.config}\n{str(err)}"
+            print(error_msg, flush=True)
+            return False
+
     def compare_outputs(self, cpu_output, custom_output):
         """Compare output results between CPU and CustomDevice"""
         if cpu_output is None or custom_output is None:
@@ -78,21 +112,7 @@ class APITestCustomDeviceVSCPU(APITestBase):
                 print("[output type diff error]", self.api_config.config, flush=True)
                 return False
                 
-            try:
-                # bfloat16 data type
-                if cpu_output.dtype == paddle.bfloat16:
-                    cpu_output = paddle.cast(cpu_output, dtype="float32")
-                if custom_output.dtype == paddle.bfloat16:
-                    custom_output = paddle.cast(custom_output, dtype="float32")
-                
-                custom_output_cpu = custom_output.cpu()
-
-                self.np_assert_accuracy(cpu_output.numpy(), custom_output_cpu.numpy(), 1e-2, 1e-2)
-                return True
-                
-            except Exception as err:
-                print("[accuracy error]", self.api_config.config, "\n", str(err), flush=True)
-                return False
+            return self._compare_single_tensor(cpu_output, custom_output)
                 
         # list/tuple case
         elif isinstance(cpu_output, (list, tuple)):
@@ -116,20 +136,7 @@ class APITestCustomDeviceVSCPU(APITestBase):
                     print(f"skip non-tensor output[{i}]:", cpu_output[i], custom_output[i], flush=True)
                     continue
                     
-                try:
-                    # bfloat16
-                    if cpu_output[i].dtype == paddle.bfloat16:
-                        cpu_output[i] = paddle.cast(cpu_output[i], dtype="float32")
-                    if custom_output[i].dtype == paddle.bfloat16:
-                        custom_output[i] = paddle.cast(custom_output[i], dtype="float32")
-                    
-                    # Convert CustomDevice output to CPU
-                    custom_output_cpu = custom_output[i].cpu()
-                    
-                    self.np_assert_accuracy(cpu_output[i].numpy(), custom_output_cpu.numpy(), 1e-2, 1e-2)
-                    
-                except Exception as err:
-                    print("[accuracy error]", self.api_config.config, f" output[{i}]", "\n", str(err), flush=True)
+                if not self._compare_single_tensor(cpu_output[i], custom_output[i], f"output[{i}]"):
                     return False
             
             return True
@@ -174,21 +181,7 @@ class APITestCustomDeviceVSCPU(APITestBase):
                 print(f"[gradient {i} type error]", self.api_config.config, flush=True)
                 return False
             
-            try:
-                # Handle bfloat16 data type
-                if cpu_grad.dtype == paddle.bfloat16:
-                    cpu_grad = paddle.cast(cpu_grad, dtype="float32")
-                if custom_grad.dtype == paddle.bfloat16:
-                    custom_grad = paddle.cast(custom_grad, dtype="float32")
-                
-                # Convert CustomDevice gradient to CPU for comparison
-                custom_grad_cpu = custom_grad.cpu()
-                
-                # Use precision comparison with tolerance 1e-2
-                self.np_assert_accuracy(cpu_grad.numpy(), custom_grad_cpu.numpy(), 1e-2, 1e-2)
-                
-            except Exception as err:
-                print(f"[gradient {i} accuracy error]", self.api_config.config, "\n", str(err), flush=True)
+            if not self._compare_single_tensor(cpu_grad, custom_grad, f"gradient {i}"):
                 return False
         
         return True
@@ -201,10 +194,14 @@ class APITestCustomDeviceVSCPU(APITestBase):
             print("[Skip]", flush=True)
             return
         
-        # 2. Check if CustomDevice is available
-        if not self.check_custom_device_available():
-            print(f"[{self.custom_device_type} not available]", self.api_config.config, flush=True)
-            write_to_log("custom_device_not_available", self.api_config.config)
+        # 2. Determine target device: prioritize XPU, fallback to CustomDevice
+        if self.check_xpu_available():
+            target_device, device_id = "xpu", self.xpu_device_id
+        elif self.check_custom_device_available():
+            target_device, device_id = self.custom_device_type, self.custom_device_id
+        else:
+            print(f"[no available device]", self.api_config.config, flush=True)
+            write_to_log("crash", self.api_config.config)
             return
         
         # 3. Parse Paddle API information
@@ -226,40 +223,36 @@ class APITestCustomDeviceVSCPU(APITestBase):
         cpu_output, cpu_grads = self.run_on_device("cpu", 0)
         if cpu_output is None:
             print("[cpu execution failed]", self.api_config.config, flush=True)
-            write_to_log("cpu_error", self.api_config.config)
+            write_to_log("paddle_error", self.api_config.config)
             return
         
-        # 6. Run API on CustomDevice (including forward and backward)
-        custom_output, custom_grads = self.run_on_device(self.custom_device_type, self.custom_device_id)
-        if custom_output is None:
-            print("[custom device execution failed]", self.api_config.config, flush=True)
-            write_to_log("custom_device_error", self.api_config.config)
+        # 6. Run API on target device (including forward and backward)
+        tgt_output, tgt_grads = self.run_on_device(target_device, device_id)
+        if tgt_output is None:
+            print(f"[{target_device} execution failed]", self.api_config.config, flush=True)
+            write_to_log(f"paddle_error", self.api_config.config)
             return
         
         # 7. Compare forward results
         print("[forward test begin]")
-        forward_pass = self.compare_outputs(cpu_output, custom_output)
+        forward_pass = self.compare_outputs(cpu_output, tgt_output)
         
         # 8. Backward test (if needed)
         backward_pass = True
         if self.need_check_grad():
             print("[Backward test begin]")
             
-            # Check CPU backward results
             if cpu_grads is None:
                 print("[cpu backward execution failed]", self.api_config.config, flush=True)
-                write_to_log("cpu_backward_error", self.api_config.config)
+                write_to_log("paddle_error", self.api_config.config)
                 backward_pass = False
-            # Check CustomDevice backward results
-            elif custom_grads is None:
-                print("[custom device backward execution failed]", self.api_config.config, flush=True)
-                write_to_log("custom_device_backward_error", self.api_config.config)
+            elif tgt_grads is None:
+                print(f"[{target_device} backward execution failed]", self.api_config.config, flush=True)
+                write_to_log(f"paddle_error", self.api_config.config)
                 backward_pass = False
             else:
-                # Compare gradient results
-                backward_pass = self.compare_gradients(cpu_grads, custom_grads)
+                backward_pass = self.compare_gradients(cpu_grads, tgt_grads)
         else:
-            # When backward test is not needed, pass by default
             backward_pass = True
         
         # 9. Final result judgment
@@ -268,7 +261,4 @@ class APITestCustomDeviceVSCPU(APITestBase):
             write_to_log("pass", self.api_config.config)
         else:
             print("[Fail]", self.api_config.config, flush=True)
-            if not forward_pass:
-                write_to_log("accuracy_error", self.api_config.config)
-            elif not backward_pass:
-                write_to_log("accuracy_error", self.api_config.config)
+            write_to_log("accuracy_error", self.api_config.config)
