@@ -1998,7 +1998,7 @@ class TensorConfig:
                         scalar_val = numpy.random.randint(-65535, 65535)
                         self.numpy_tensor = numpy.array(scalar_val, dtype=self.dtype)
                     else:
-                        scalar_val = numpy.random.random() - 0.5
+                        scalar_val = (numpy.random.random() - 0.5)*1.2
                         self.numpy_tensor = numpy.array(scalar_val, dtype=self.dtype)
                 elif USE_CACHED_NUMPY and self.dtype not in ["int64", "float64"]:
                     self.numpy_tensor = self.get_cached_numpy(self.dtype, self.shape)
@@ -2006,7 +2006,7 @@ class TensorConfig:
                     if "int" in self.dtype:
                         self.numpy_tensor = (numpy.random.randint(-65535, 65535, size=self.shape)).astype(self.dtype)
                     else:
-                        self.numpy_tensor = (numpy.random.random(self.shape) - 0.5).astype(self.dtype)
+                        self.numpy_tensor = (numpy.random.random(self.shape) - 0.5)*1.2.astype(self.dtype)
 
         self.dtype = original_dtype
         return self.numpy_tensor
