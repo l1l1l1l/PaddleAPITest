@@ -576,7 +576,7 @@ def main():
         aggregate_logs()
 
         # read checkpoint
-        finish_configs = set()#read_log("checkpoint")
+        finish_configs = read_log("checkpoint")
         print(len(finish_configs), "cases in checkpoint.", flush=True)
 
         api_config_count = 0
