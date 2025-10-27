@@ -664,7 +664,6 @@ def main():
                 for config in batch:
                     #timeout = estimate_timeout(config)
                     timeout = options.timeout
-                    print("timeout : ", timeout)
                     future = pool.schedule(
                         run_test_case,
                         [config, options],
