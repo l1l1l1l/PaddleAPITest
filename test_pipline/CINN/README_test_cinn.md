@@ -36,7 +36,7 @@ big tensor 的配置集位于：`tester/api_config/8_big_tensor/big_tensor_merge
 
 `run-example.sh` 是与 engineV2 配套的执行脚本，可以方便地修改测试参数并执行测试
 
-复制 `run-example.sh`，重命名为 `run_cinn.sh`
+复制 `run-example.sh`，重命名为 `run_cinn.sh` (也可直接使用 `test_pipline/CINN/run_cinn.sh` )
 ```bash
 cp run-example.sh run_cinn.sh
 ```
@@ -130,6 +130,7 @@ exit 0
 ```bash
 # chmod +x run_cinn.sh
 ./run_cinn.sh
+# test_pipline/CINN/run_cinn.sh
 ```
 
 或者直接执行以下命令：（建议使用 nohup 避免终端终止时停止主进程）
