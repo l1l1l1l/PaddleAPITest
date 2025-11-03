@@ -242,7 +242,10 @@ def aggregate_logs(end=False):
             all_success = False
         else:
             for file_path in tmp_tol_files:
-                file_path.unlink()
+                if end:
+                    file_path.unlink()
+                else:
+                    file_path.write_bytes(b"")
 
     stable_success = True
     stable_file = TEST_LOG_PATH / f"stable.csv"
@@ -283,7 +286,10 @@ def aggregate_logs(end=False):
             all_success = False
         else:
             for file_path in tmp_stable_files:
-                file_path.unlink()
+                if end:
+                    file_path.unlink()
+                else:
+                    file_path.write_bytes(b"")
 
     if end:
         if all_success and not os.listdir(TMP_LOG_PATH):
