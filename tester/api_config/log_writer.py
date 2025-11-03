@@ -159,7 +159,10 @@ def aggregate_logs(end=False):
             all_success = False
         else:
             for file_path in log_files:
-                file_path.unlink()
+                if end:
+                    file_path.unlink()
+                else:
+                    file_path.write_bytes(b"")
 
     log_success = True
     log_file = TEST_LOG_PATH / f"log_inorder.log"
