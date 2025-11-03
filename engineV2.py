@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 import time
+import numpy as np
 from concurrent.futures import TimeoutError, as_completed
 from datetime import datetime
 from multiprocessing import Lock, Manager, cpu_count, set_start_method
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import pynvml
 from pebble import ProcessExpired, ProcessPool
+
 
 if TYPE_CHECKING:
     from tester import (
@@ -469,9 +471,24 @@ def main():
         default=1800,
         help="Timeout setting for a single test case, in seconds",
     )
+    parser.add_argument(
+        "--show_runtime_status",
+        type=parse_bool,
+        default=True,
+        help="Whether to show the current test progress in real-time. If set to False, only failed cases will be output",
+    )
+    parser.add_argument(
+        "--random_seed",
+        type=int,
+        default=0,
+        help="Timeout setting for a single test case, in seconds",
+    )
+    
     options = parser.parse_args()
     print(f"Options: {vars(options)}", flush=True)
-
+    if options.random_seed != parser.get_default('random_seed'):
+        np.random.seed(options.random_seed)
+        
     mode = [
         options.accuracy,
         options.paddle_only,
@@ -690,9 +707,11 @@ def main():
                     config = futures[future]
                     try:
                         i += 1
-                        print(f"[{i}/{all_case}] Testing {config}", flush=True)
+                        if options.show_runtime_status:
+                            print(f"[{i}/{all_case}] Testing {config}", flush=True)
                         future.result()
-                        print(f"[info] Test case succeeded for {config}", flush=True)
+                        if options.show_runtime_status:
+                            print(f"[info] Test case succeeded for {config}", flush=True)
                     except TimeoutError as err:
                         write_to_log("timeout", config)
                         print(
