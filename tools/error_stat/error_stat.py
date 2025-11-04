@@ -165,8 +165,8 @@ def error_state(input_path, output_path, split_errors=False):
     write_logs_and_meta(output_path, pass_logs_dict, "pass")
 
     # 处理 error 和 invalid
+    error_logs_dict, invalid_logs_dict = classify_by_config(logs, config_sets)
     if split_errors:
-        error_logs_dict, invalid_logs_dict = classify_by_config(logs, config_sets)
         for prefix in config_sets.keys():
             if prefix in ("pass", "checkpoint"):
                 continue
@@ -184,16 +184,30 @@ def error_state(input_path, output_path, split_errors=False):
                 )
     else:
         error_union = {}
-        union_configs = set()
-        for prefix, configs in config_sets.items():
-            if prefix not in ("pass", "checkpoint"):
-                union_configs |= configs
-                for content in logs:
-                    key = get_sort_key(content)
-                    if key in configs:
-                        error_union[key] = content
-        check_count_consistency(set(error_union.keys()), union_configs, "error")
-        write_logs_and_meta(output_path, error_union, "error")
+        invalid_union = {}
+        error_keys_union = set()
+        invalid_keys_union = set()
+        for prefix in config_sets.keys():
+            if prefix in ("pass", "checkpoint"):
+                continue
+            error_union.update(error_logs_dict.get(prefix, {}))
+            error_keys_union |= set(error_logs_dict.get(prefix, {}).keys())
+            inv_prefix = f"invalid_{prefix}"
+            invalid_union.update(invalid_logs_dict.get(inv_prefix, {}))
+            invalid_keys_union |= set(invalid_logs_dict.get(inv_prefix, {}).keys())
+        all_keys = error_keys_union | invalid_keys_union
+        all_configs = set().union(
+            *(
+                configs
+                for p, configs in config_sets.items()
+                if p not in ("pass", "checkpoint")
+            )
+        )
+        check_count_consistency(all_keys, all_configs, "error+invalid")
+        if error_union:
+            write_logs_and_meta(output_path, error_union, "error")
+        if invalid_union:
+            write_logs_and_meta(output_path, invalid_union, "invalid")
 
 
 def main():
@@ -217,7 +231,7 @@ def main():
     args = parser.parse_args()
     if args.output is None:
         args.output = args.input
-    error_state(args.input, args.output, split_errors=True)
+    error_state(args.input, args.output, split_errors=args.split_errors)
 
 
 if __name__ == "__main__":
