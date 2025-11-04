@@ -553,13 +553,21 @@ class APITestBase:
         if isinstance(outputs, paddle.Tensor):
             result_outputs.append(outputs)
         elif isinstance(outputs, list):
-            result_outputs = [output for output in outputs if isinstance(output, paddle.Tensor) and output._is_initialized()]
+            result_outputs = [
+                output
+                for output in outputs
+                if isinstance(output, paddle.Tensor)
+                and (output._is_initialized() or output.numel() == 0)
+            ]
         elif isinstance(outputs, paddle.autograd.autograd.Hessian) or \
                 isinstance(outputs, paddle.autograd.autograd.Jacobian):
             result_outputs.append(outputs[:])
         elif isinstance(outputs, tuple):
             for output in outputs:
-                if output is None or (isinstance(output, paddle.Tensor) and not output._is_initialized()):
+                if output is None or (
+                    isinstance(output, paddle.Tensor)
+                    and not (output._is_initialized() or output.numel() == 0)
+                ):
                     continue
                 elif isinstance(output, paddle.Tensor):
                     result_outputs.append(output)
