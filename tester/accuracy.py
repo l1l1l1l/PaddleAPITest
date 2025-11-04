@@ -292,7 +292,13 @@ class APITestAccuracy(APITestBase):
                               flush=True)
                         write_to_log("accuracy_error", self.api_config.config)
                         return
-                elif (paddle_item is None or not paddle_item._is_initialized()) and torch_item is None:
+                elif (
+                    paddle_item is None
+                    or isinstance(paddle_item, paddle.Tensor)
+                    and not (paddle_item._is_initialized() or paddle_item.numel() == 0)
+                ) and torch_item is None:
+                    # paddle is None and torch is None
+                    # paddle is Tensor but uninitialized and torch is None
                     pass
                 elif not isinstance(paddle_item, paddle.Tensor) or not isinstance(torch_item, torch.Tensor):
                     print(f"[not compare] at {i} {self.api_config.config}\n"
@@ -366,7 +372,13 @@ class APITestAccuracy(APITestBase):
                 for i, (paddle_item, torch_item) in enumerate(zip(paddle_out_grads, torch_out_grads)):
                     if isinstance(paddle_item, int):
                         self.np_assert_accuracy(numpy.array(paddle_item), numpy.array(torch_item), atol=self.atol, rtol=self.rtol)
-                    elif (paddle_item is None or not paddle_item._is_initialized()) and torch_item is None:
+                    elif (
+                        paddle_item is None
+                        or isinstance(paddle_item, paddle.Tensor)
+                        and not (paddle_item._is_initialized() or paddle_item.numel() == 0)
+                    ) and torch_item is None:
+                        # paddle is None and torch is None
+                        # paddle is Tensor but uninitialized and torch is None
                         pass
                     elif not isinstance(paddle_item, paddle.Tensor) or not isinstance(torch_item, torch.Tensor):
                         print(f"[not compare] backward at {i} {self.api_config.config}\n"
