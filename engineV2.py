@@ -10,7 +10,7 @@ from concurrent.futures import TimeoutError, as_completed
 from datetime import datetime
 from multiprocessing import Lock, Manager, cpu_count, set_start_method
 from typing import TYPE_CHECKING
-import paddle
+import subprocess
 
 from pebble import ProcessExpired, ProcessPool
 
@@ -74,10 +74,28 @@ def estimate_timeout(api_config) -> float:
     # return TIMEOUT_STEPS[-1][1]
     return 1800
 
+def get_device_count() -> int:
+    if shutil.which("xpu-smi"):
+        out = subprocess.check_output(["xpu-smi"], text=True, stderr=subprocess.STDOUT)
+        ids = set()
+        for line in out.splitlines():
+            if "Processes:" in line:
+                break
+            m = re.match(r"^\|\s*(\d+)\s+\S", line)
+            if m:
+                ids.add(int(m.group(1)))
+        return len(ids)
+
+    if shutil.which("nvidia-smi"):
+        out = subprocess.check_output(["nvidia-smi", "-L"], text=True)
+        return sum(1 for l in out.splitlines() if l.startswith("GPU "))
+
+    return 0
+
 
 def validate_gpu_options(options) -> tuple:
     """Validate and normalize GPU-related options."""
-    device_count = paddle.device.device_count()
+    device_count = get_device_count()
     if device_count == 0:
         raise ValueError("No devices found")
     if options.gpu_ids:
@@ -127,6 +145,71 @@ def parse_bool(value):
     else:
         raise ValueError(f"Invalid boolean value: {value} parsed from command line")
 
+def _run_cmd(cmd: list[str]) -> str:
+    """Run a shell command and return stdout as text."""
+    return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+
+def is_xpu_env() -> bool:
+    """Detect whether XPU environment is present by checking `xpu-smi`."""
+    if not shutil.which("xpu-smi"):
+        return False
+    try:
+        out = _run_cmd(["xpu-smi"])
+        # If any device row like "|   0  ..." exists, we consider XPU present.
+        return re.search(r"^\|\s*\d+\s+\S", out, re.M) is not None
+    except Exception:
+        return False
+
+def get_xpu_memory_gb_for_id(gpu_id: int) -> tuple[float, float]:
+    """
+    Return (total_GB, used_GB) for a given XPU device id by parsing `xpu-smi`.
+    We pick the FIRST 'MiB / MiB' pair after the device header line, which
+    corresponds to 'Memory-Usage', ignoring the later 'L3-Usage' column.
+    """
+    if not shutil.which("xpu-smi"):
+        raise RuntimeError("xpu-smi not found")
+    out = _run_cmd(["xpu-smi"])
+    lines = out.splitlines()
+    for i, line in enumerate(lines):
+        # Match the line with device id at the beginning of a section
+        if re.match(rf"^\|\s*{gpu_id}\s+\S", line):
+            # Search next few lines for the "MiB / MiB" pair
+            for j in range(i + 1, min(i + 5, len(lines))):
+                m = re.search(r"(\d+)\s*MiB\s*/\s*(\d+)\s*MiB", lines[j])
+                if m:
+                    used_mib = int(m.group(1))
+                    total_mib = int(m.group(2))
+                    return total_mib / 1024.0, used_mib / 1024.0
+            break
+    raise RuntimeError(f"Failed to parse xpu-smi memory for device {gpu_id}")
+
+def get_nvidia_memory_gb_for_id(gpu_id: int) -> tuple[float, float]:
+    """
+    Return (total_GB, used_GB) for a given NVIDIA GPU id via `nvidia-smi`.
+    Uses CSV query: index,memory.total,memory.used (MiB), converted to GB.
+    """
+    if not shutil.which("nvidia-smi"):
+        raise RuntimeError("nvidia-smi not found")
+    out = _run_cmd([
+        "nvidia-smi",
+        "--query-gpu=index,memory.total,memory.used",
+        "--format=csv,noheader,nounits",
+    ])
+    for line in out.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 3:
+            continue
+        try:
+            idx = int(parts[0])
+            if idx != gpu_id:
+                continue
+            total_mib = float(parts[1])
+            used_mib = float(parts[2])
+            return total_mib / 1024.0, used_mib / 1024.0
+        except ValueError:
+            continue
+    raise RuntimeError(f"Failed to parse nvidia-smi memory for device {gpu_id}")
+
 
 def check_gpu_memory(
     gpu_ids, num_workers_per_gpu, required_memory
@@ -137,15 +220,13 @@ def check_gpu_memory(
 
     for gpu_id in gpu_ids:
         try:
-            if paddle.is_compiled_with_xpu():
-                total_memory = paddle.device.xpu.memory_total(gpu_id) / (1024**3)
-                used_memory = paddle.device.xpu.memory_used(gpu_id) / (1024**3)
+            if is_xpu_env():
+                # XPU path: read total/used from xpu-smi (GB)
+                total_memory, used_memory = get_xpu_memory_gb_for_id(gpu_id)
             else:
-                paddle.device.set_device(gpu_id)
-                device_props = paddle.device.get_device_properties(gpu_id)
-                total_memory = device_props.total_memory / (1024**3)
-                used_memory = paddle.device.memory_allocated() / (1024**3)
-            
+                # NVIDIA path: read total/used from nvidia-smi (GB)
+                total_memory, used_memory = get_nvidia_memory_gb_for_id(gpu_id)
+
             free_memory = total_memory - used_memory
             max_workers = int(free_memory // required_memory)
             
@@ -281,13 +362,10 @@ def run_test_case(api_config_str, options):
 
     while True:
         try:
-            if paddle.is_compiled_with_xpu():
-                total_memory = paddle.device.xpu.memory_total(gpu_id) / (1024**3)
-                used_memory = paddle.device.xpu.memory_used(gpu_id) / (1024**3)
+            if is_xpu_env():
+                total_memory, used_memory = get_xpu_memory_gb_for_id(gpu_id)
             else:
-                paddle.device.set_device(gpu_id)
-                total_memory = paddle.device.max_memory_reserved() / (1024**3)
-                used_memory = paddle.device.memory_allocated() / (1024**3)
+                total_memory, used_memory = get_nvidia_memory_gb_for_id(gpu_id)
             
             free_memory = total_memory - used_memory
             
