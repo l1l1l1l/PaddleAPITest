@@ -6,15 +6,14 @@ import os
 import signal
 import sys
 import time
-import numpy as np
 from concurrent.futures import TimeoutError, as_completed
 from datetime import datetime
 from multiprocessing import Lock, Manager, cpu_count, set_start_method
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pynvml
 from pebble import ProcessExpired, ProcessPool
-
 
 if TYPE_CHECKING:
     from tester import (
@@ -222,16 +221,11 @@ def init_worker_gpu(
         globals()["torch"] = torch
         globals()["paddle"] = paddle
 
-        from tester import (
-            APIConfig,
-            APITestAccuracy,
-            APITestAccuracyStable,
-            APITestCINNVSDygraph,
-            APITestPaddleGPUPerformance,
-            APITestPaddleOnly,
-            APITestPaddleTorchGPUPerformance,
-            APITestTorchGPUPerformance,
-        )
+        from tester import (APIConfig, APITestAccuracy, APITestAccuracyStable,
+                            APITestCINNVSDygraph, APITestPaddleGPUPerformance,
+                            APITestPaddleOnly,
+                            APITestPaddleTorchGPUPerformance,
+                            APITestTorchGPUPerformance)
 
         test_classes = {
             "APIConfig": APIConfig,
@@ -530,16 +524,11 @@ def main():
 
     if options.api_config:
         # Single config execution
-        from tester import (
-            APIConfig,
-            APITestAccuracy,
-            APITestAccuracyStable,
-            APITestCINNVSDygraph,
-            APITestPaddleGPUPerformance,
-            APITestPaddleOnly,
-            APITestPaddleTorchGPUPerformance,
-            APITestTorchGPUPerformance,
-        )
+        from tester import (APIConfig, APITestAccuracy, APITestAccuracyStable,
+                            APITestCINNVSDygraph, APITestPaddleGPUPerformance,
+                            APITestPaddleOnly,
+                            APITestPaddleTorchGPUPerformance,
+                            APITestTorchGPUPerformance)
 
         # set log_writer
         set_engineV2()

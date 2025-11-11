@@ -4,11 +4,13 @@ import traceback
 import numpy
 import paddle
 import torch
-# from func_timeout import func_set_timeout
 
 from .api_config.log_writer import write_to_log
-from .base import APITestBase, CUDA_ERROR, CUDA_OOM
+from .base import CUDA_ERROR, CUDA_OOM, APITestBase
 from .paddle_to_torch import get_converter
+
+# from func_timeout import func_set_timeout
+
 
 
 class APITestAccuracy(APITestBase):

@@ -1,13 +1,13 @@
 import traceback
 
+import numpy
 import paddle
 import torch
-import numpy
 
+from .accuracy import process_grad_output, process_output
 from .api_config.log_writer import log_accuracy_stable, write_to_log
-from .base import APITestBase, CUDA_ERROR, CUDA_OOM
+from .base import CUDA_ERROR, CUDA_OOM, APITestBase
 from .paddle_to_torch import get_converter
-from .accuracy import process_output, process_grad_output
 
 
 class APITestAccuracyStable(APITestBase):

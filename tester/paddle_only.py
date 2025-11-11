@@ -1,9 +1,11 @@
 
 import paddle
-#from func_timeout import func_set_timeout
 
 from .api_config.log_writer import write_to_log
-from .base import APITestBase, CUDA_ERROR, CUDA_OOM
+from .base import CUDA_ERROR, CUDA_OOM, APITestBase
+
+#from func_timeout import func_set_timeout
+
 
 
 class APITestPaddleOnly(APITestBase):
