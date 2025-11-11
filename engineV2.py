@@ -222,11 +222,16 @@ def init_worker_gpu(
         globals()["torch"] = torch
         globals()["paddle"] = paddle
 
-        from tester import (APIConfig, APITestAccuracy, APITestAccuracyStable,
-                            APITestCINNVSDygraph, APITestPaddleGPUPerformance,
-                            APITestPaddleOnly,
-                            APITestPaddleTorchGPUPerformance,
-                            APITestTorchGPUPerformance)
+        from tester import (
+            APIConfig,
+            APITestAccuracy,
+            APITestAccuracyStable,
+            APITestCINNVSDygraph,
+            APITestPaddleGPUPerformance,
+            APITestPaddleOnly,
+            APITestPaddleTorchGPUPerformance,
+            APITestTorchGPUPerformance,
+        )
 
         test_classes = {
             "APIConfig": APIConfig,
@@ -321,10 +326,12 @@ def run_test_case(api_config_str, options):
     try:
         case.test()
     except Exception as err:
-        if "CUDA out of memory" in str(err) or "Out of memory error" in str(err):
-            os._exit(99)
+        # if fatal error happens, subprocess need to exit with non-zero status
         if "CUDA error" in str(err) or "memory corruption" in str(err):
-            os._exit(1)
+            os._exit(99)
+        if "CUDA out of memory" in str(err) or "Out of memory error" in str(err):
+            os._exit(98)
+        # if not fatal error, subprocess will be alive and report error
         print(f"[test error] {api_config_str}: {err}", flush=True)
         raise
     finally:
@@ -420,7 +427,7 @@ def main():
         type=str,
         default="",
         help="GPU IDs to use ('-1' for all available). "
-            "Accepts comma-separated values and/or ranges (e.g., '0-3,6,7')",
+        "Accepts comma-separated values and/or ranges (e.g., '0-3,6,7')",
     )
     parser.add_argument(
         "--required_memory",
@@ -483,12 +490,12 @@ def main():
         default=0,
         help="The numpy random seed ",
     )
-    
+
     options = parser.parse_args()
     print(f"Options: {vars(options)}", flush=True)
-    if options.random_seed != parser.get_default('random_seed'):
+    if options.random_seed != parser.get_default("random_seed"):
         np.random.seed(options.random_seed)
-        
+
     mode = [
         options.accuracy,
         options.paddle_only,
@@ -523,11 +530,16 @@ def main():
 
     if options.api_config:
         # Single config execution
-        from tester import (APIConfig, APITestAccuracy, APITestAccuracyStable,
-                            APITestCINNVSDygraph, APITestPaddleGPUPerformance,
-                            APITestPaddleOnly,
-                            APITestPaddleTorchGPUPerformance,
-                            APITestTorchGPUPerformance)
+        from tester import (
+            APIConfig,
+            APITestAccuracy,
+            APITestAccuracyStable,
+            APITestCINNVSDygraph,
+            APITestPaddleGPUPerformance,
+            APITestPaddleOnly,
+            APITestPaddleTorchGPUPerformance,
+            APITestTorchGPUPerformance,
+        )
 
         # set log_writer
         set_engineV2()
@@ -630,7 +642,6 @@ def main():
         api_config_count = len(api_configs)
         api_configs = sorted(api_configs - finish_configs)
         all_case = len(api_configs)
-        fail_case = 0
         finish_case = api_config_count - all_case
         if finish_case:
             print(finish_case, "cases already tested.", flush=True)
@@ -687,9 +698,9 @@ def main():
         signal.signal(signal.SIGTERM, cleanup_handler)
 
         # batch test
+        tested_case = 0
         try:
             BATCH_SIZE = 20000
-            i = 0
             for batch_start in range(0, len(api_configs), BATCH_SIZE):
                 batch = api_configs[batch_start : batch_start + BATCH_SIZE]
                 futures = {}
@@ -706,22 +717,35 @@ def main():
                 for future in as_completed(futures):
                     config = futures[future]
                     try:
-                        i += 1
+                        tested_case += 1
                         if options.show_runtime_status:
-                            print(f"[{i}/{all_case}] Testing {config}", flush=True)
+                            print(
+                                f"[{tested_case}/{all_case}] Testing {config}",
+                                flush=True,
+                            )
                         future.result()
                         if options.show_runtime_status:
-                            print(f"[info] Test case succeeded for {config}", flush=True)
+                            print(
+                                f"[info] Test case succeeded for {config}", flush=True
+                            )
                     except TimeoutError as err:
                         write_to_log("timeout", config)
                         print(
                             f"[error] Test case timed out for {config}: {err}",
                             flush=True,
                         )
-                        fail_case += 1
                     except ProcessExpired as err:
+                        # we have catched 99 and 98 error in test class, so we only print info here
+                        # when any cuda error and oom happen, subprocess will crash too,
+                        # these case has been classified to oom and cuda_error and won't be classified to crash
                         if err.exitcode == 99:
-                            write_to_log("oom", config)
+                            # write_to_log("cuda_error", config)
+                            print(
+                                f"[error] CUDA error for {config}: {err}",
+                                flush=True,
+                            )
+                        elif err.exitcode == 98:
+                            # write_to_log("oom", config)
                             print(
                                 f"[error] CUDA out of memory for {config}",
                                 flush=True,
@@ -732,14 +756,12 @@ def main():
                                 f"[fatal] Worker crashed for {config}: {err}",
                                 flush=True,
                             )
-                        fail_case += 1
                     except Exception as err:
                         print(
                             f"[warn] Test case failed for {config}: {err}",
                             flush=True,
                         )
                 aggregate_logs()
-            print(f"{all_case} cases tested, {fail_case} failed.", flush=True)
             pool.close()
             pool.join()
         except Exception as e:
@@ -748,6 +770,7 @@ def main():
             total_time = time.time() - start_time
             print(f"Test time: {round(total_time/60, 3)} minutes.", flush=True)
         finally:
+            print(f"{tested_case} cases have been tested.", flush=True)
             log_counts = aggregate_logs(end=True)
             print_log_info(all_case, log_counts)
             end_time = time.time()
