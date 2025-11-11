@@ -11,6 +11,7 @@ from datetime import datetime
 from multiprocessing import Lock, Manager, cpu_count, set_start_method
 from typing import TYPE_CHECKING
 import subprocess
+import pynvml
 
 from pebble import ProcessExpired, ProcessPool
 
@@ -160,56 +161,27 @@ def is_xpu_env() -> bool:
     except Exception:
         return False
 
-def get_xpu_memory_gb_for_id(gpu_id: int) -> tuple[float, float]:
-    """
-    Return (total_GB, used_GB) for a given XPU device id by parsing `xpu-smi`.
-    We pick the FIRST 'MiB / MiB' pair after the device header line, which
-    corresponds to 'Memory-Usage', ignoring the later 'L3-Usage' column.
-    """
-    if not shutil.which("xpu-smi"):
-        raise RuntimeError("xpu-smi not found")
-    out = _run_cmd(["xpu-smi"])
-    lines = out.splitlines()
-    for i, line in enumerate(lines):
-        # Match the line with device id at the beginning of a section
-        if re.match(rf"^\|\s*{gpu_id}\s+\S", line):
-            # Search next few lines for the "MiB / MiB" pair
-            for j in range(i + 1, min(i + 5, len(lines))):
-                m = re.search(r"(\d+)\s*MiB\s*/\s*(\d+)\s*MiB", lines[j])
-                if m:
-                    used_mib = int(m.group(1))
-                    total_mib = int(m.group(2))
-                    return total_mib / 1024.0, used_mib / 1024.0
-            break
-    raise RuntimeError(f"Failed to parse xpu-smi memory for device {gpu_id}")
-
-def get_nvidia_memory_gb_for_id(gpu_id: int) -> tuple[float, float]:
-    """
-    Return (total_GB, used_GB) for a given NVIDIA GPU id via `nvidia-smi`.
-    Uses CSV query: index,memory.total,memory.used (MiB), converted to GB.
-    """
-    if not shutil.which("nvidia-smi"):
-        raise RuntimeError("nvidia-smi not found")
-    out = _run_cmd([
-        "nvidia-smi",
-        "--query-gpu=index,memory.total,memory.used",
-        "--format=csv,noheader,nounits",
-    ])
-    for line in out.splitlines():
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 3:
-            continue
-        try:
-            idx = int(parts[0])
-            if idx != gpu_id:
-                continue
-            total_mib = float(parts[1])
-            used_mib = float(parts[2])
-            return total_mib / 1024.0, used_mib / 1024.0
-        except ValueError:
-            continue
-    raise RuntimeError(f"Failed to parse nvidia-smi memory for device {gpu_id}")
-
+def get_memory_info(gpu_id):
+    """Return (total_memory, used_memory) in GB for GPU/XPU."""
+    if is_xpu_env():
+        out = _run_cmd(["xpu-smi"])
+        lines = out.splitlines()
+        for i, line in enumerate(lines):
+            # Match the line with device id at the beginning of a section
+            if re.match(rf"^\|\s*{gpu_id}\s+\S", line):
+                # Search next few lines for the "MiB / MiB" pair
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    m = re.search(r"(\d+)\s*MiB\s*/\s*(\d+)\s*MiB", lines[j])
+                    if m:
+                        used_mib = int(m.group(1))
+                        total_mib = int(m.group(2))
+                        return total_mib / 1024.0, used_mib / 1024.0
+                break
+        raise RuntimeError(f"Failed to parse xpu-smi memory for device {gpu_id}")
+    else:
+        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
+        mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        return int(mem_info.total) / (1024**3), int(mem_info.used) / (1024**3)
 
 def check_gpu_memory(
     gpu_ids, num_workers_per_gpu, required_memory
@@ -217,29 +189,28 @@ def check_gpu_memory(
     assert isinstance(gpu_ids, tuple) and len(gpu_ids) > 0
     available_gpus = []
     max_workers_per_gpu = {}
+    if not is_xpu_env():
+        pynvml.nvmlInit()
+    try:
+        for gpu_id in gpu_ids:
+            try:
+                total_memory, used_memory = get_memory_info(gpu_id)
+                free_memory = total_memory - used_memory
+                max_workers = int(free_memory // required_memory)
 
-    for gpu_id in gpu_ids:
-        try:
-            if is_xpu_env():
-                # XPU path: read total/used from xpu-smi (GB)
-                total_memory, used_memory = get_xpu_memory_gb_for_id(gpu_id)
-            else:
-                # NVIDIA path: read total/used from nvidia-smi (GB)
-                total_memory, used_memory = get_nvidia_memory_gb_for_id(gpu_id)
-
-            free_memory = total_memory - used_memory
-            max_workers = int(free_memory // required_memory)
-            
-            if max_workers >= 1:
-                available_gpus.append(gpu_id)
-                max_workers_per_gpu[gpu_id] = (
-                    max_workers
-                    if num_workers_per_gpu == -1
-                    else min(max_workers, num_workers_per_gpu)
-                )
-        except Exception as e:
-            print(f"[WARNING] Failed to check device {gpu_id}: {str(e)}", flush=True)
-            continue
+                if max_workers >= 1:
+                    available_gpus.append(gpu_id)
+                    max_workers_per_gpu[gpu_id] = (
+                        max_workers
+                        if num_workers_per_gpu == -1
+                        else min(max_workers, num_workers_per_gpu)
+                    )
+            except Exception as e:
+                print(f"[WARNING] Failed to check device {gpu_id}: {str(e)}", flush=True)
+                continue
+    finally:
+        if not is_xpu_env():
+            pynvml.nvmlShutdown()
 
     return available_gpus, max_workers_per_gpu
 
