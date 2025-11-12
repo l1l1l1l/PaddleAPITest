@@ -150,26 +150,29 @@ def _run_cmd(cmd: list[str]) -> str:
     """Run a shell command and return stdout as text."""
     return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
 
-def is_xpu_env() -> bool:
-    """Detect whether XPU environment is present by checking `xpu-smi`."""
-    if not shutil.which("xpu-smi"):
+def is_gpu_env() -> bool:
+    """Detect whether NVIDIA GPU environment is present (via `nvidia-smi`)."""
+    if not shutil.which("nvidia-smi"):
         return False
     try:
-        out = _run_cmd(["xpu-smi"])
-        # If any device row like "|   0  ..." exists, we consider XPU present.
-        return re.search(r"^\|\s*\d+\s+\S", out, re.M) is not None
+        out = _run_cmd(["nvidia-smi", "-L"])
+        return any(line.strip().startswith("GPU ") for line in out.splitlines())
     except Exception:
         return False
 
 def get_memory_info(gpu_id):
-    """Return (total_memory, used_memory) in GB for GPU/XPU."""
-    if is_xpu_env():
+    """Return (total_memory, used_memory) in GB for GPU (NVIDIA) or XPU."""
+    if is_gpu_env():
+        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
+        mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        return int(mem_info.total) / (1024**3), int(mem_info.used) / (1024**3)
+    else:
+        if not shutil.which("xpu-smi"):
+            raise RuntimeError("Neither NVIDIA GPU nor XPU environment detected.")
         out = _run_cmd(["xpu-smi"])
         lines = out.splitlines()
         for i, line in enumerate(lines):
-            # Match the line with device id at the beginning of a section
             if re.match(rf"^\|\s*{gpu_id}\s+\S", line):
-                # Search next few lines for the "MiB / MiB" pair
                 for j in range(i + 1, min(i + 5, len(lines))):
                     m = re.search(r"(\d+)\s*MiB\s*/\s*(\d+)\s*MiB", lines[j])
                     if m:
@@ -178,10 +181,6 @@ def get_memory_info(gpu_id):
                         return total_mib / 1024.0, used_mib / 1024.0
                 break
         raise RuntimeError(f"Failed to parse xpu-smi memory for device {gpu_id}")
-    else:
-        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
-        mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        return int(mem_info.total) / (1024**3), int(mem_info.used) / (1024**3)
 
 def check_gpu_memory(
     gpu_ids, num_workers_per_gpu, required_memory
@@ -189,7 +188,7 @@ def check_gpu_memory(
     assert isinstance(gpu_ids, tuple) and len(gpu_ids) > 0
     available_gpus = []
     max_workers_per_gpu = {}
-    if not is_xpu_env():
+    if is_gpu_env():
         pynvml.nvmlInit()
     try:
         for gpu_id in gpu_ids:
@@ -209,7 +208,7 @@ def check_gpu_memory(
                 print(f"[WARNING] Failed to check device {gpu_id}: {str(e)}", flush=True)
                 continue
     finally:
-        if not is_xpu_env():
+        if is_gpu_env():
             pynvml.nvmlShutdown()
 
     return available_gpus, max_workers_per_gpu
@@ -330,7 +329,7 @@ def run_test_case(api_config_str, options):
         f"{datetime.now()} GPU {gpu_id} {os.getpid()} test begin: {api_config_str}",
         flush=True,
     )
-    if not is_xpu_env():
+    if is_gpu_env():
         pynvml.nvmlInit()
     try:
         while True:
@@ -352,7 +351,7 @@ def run_test_case(api_config_str, options):
                 print(f"[WARNING] Failed to check device memory: {str(e)}", flush=True)
                 time.sleep(60)
     finally:
-        if not is_xpu_env():
+        if is_gpu_env():
             pynvml.nvmlShutdown()
     try:
         api_config = APIConfig(api_config_str)
