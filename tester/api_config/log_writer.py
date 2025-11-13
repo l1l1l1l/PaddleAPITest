@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pandas as pd
+import errno
 
 # 日志文件路径
 DIR_PATH = Path(__file__).resolve()
