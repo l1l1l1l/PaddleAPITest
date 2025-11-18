@@ -4,11 +4,13 @@ import traceback
 import numpy
 import paddle
 import torch
-# from func_timeout import func_set_timeout
 
 from .api_config.log_writer import write_to_log
-from .base import APITestBase
+from .base import CUDA_ERROR, CUDA_OOM, APITestBase
 from .paddle_to_torch import get_converter
+
+# from func_timeout import func_set_timeout
+
 
 
 class APITestAccuracy(APITestBase):
@@ -124,8 +126,10 @@ class APITestAccuracy(APITestBase):
             print(f"[torch error] {self.api_config.config}\n{str(err)}", flush=True)
             traceback.print_exc()
             write_to_log("torch_error", self.api_config.config)
-            if "CUDA error" in str(err) or "memory corruption" in str(err) or "CUDA out of memory" in str(err):
-                raise err
+            if any(cuda_err in str(err) for cuda_err in CUDA_ERROR) or any(
+                cuda_err in str(err) for cuda_err in CUDA_OOM
+            ):
+                raise
             return
 
         torch_grad_success = False
@@ -148,9 +152,14 @@ class APITestAccuracy(APITestBase):
                     print(f"[numpy error] {self.api_config.config}\n{str(err)}")
                     write_to_log("numpy_error", self.api_config.config)
                     return
+                # some torch backward error can be tolerable, so we catch cuda error here
+                if any(cuda_err in str(err) for cuda_err in CUDA_ERROR) or any(
+                    cuda_err in str(err) for cuda_err in CUDA_OOM
+                ):
+                    print(f"[torch error] backward {self.api_config.config}\n{str(err)}", flush=True)
+                    write_to_log("torch_error", self.api_config.config)
+                    raise
                 print(str(err), flush=True)
-                if "CUDA error" in str(err) or "memory corruption" in str(err) or "CUDA out of memory" in str(err):
-                    raise err
             try:
                 paddle.base.core.eager._for_test_check_cuda_error()
             except Exception as err:
@@ -203,19 +212,23 @@ class APITestAccuracy(APITestBase):
                 print(f"[Pass] {self.api_config.config}", flush=True)
                 write_to_log("pass", self.api_config.config)
                 return
+            if any(cuda_err in str(err) for cuda_err in CUDA_ERROR):
+                print(f"[cuda error] {self.api_config.config}\n{str(err)}", flush=True)
+                write_to_log("cuda_error", self.api_config.config)
+                raise
+            if any(cuda_err in str(err) for cuda_err in CUDA_OOM):
+                print(f"[oom] {self.api_config.config}\n{str(err)}", flush=True)
+                write_to_log("oom", self.api_config.config)
+                raise
             print(f"[paddle error] {self.api_config.config}\n{str(err)}", flush=True)
             write_to_log("paddle_error", self.api_config.config)
-            if "CUDA error" in str(err) or "memory corruption" in str(err):
-                raise err
-            if "CUDA out of memory" in str(err) or "Out of memory error" in str(err):
-                raise err
             return
 
         try:
             paddle.base.core.eager._for_test_check_cuda_error()
         except Exception as err:
             print(f"[cuda error] {self.api_config.config}\n{str(err)}", flush=True)
-            write_to_log("paddle_error", self.api_config.config)
+            write_to_log("cuda_error", self.api_config.config)
             raise
 
         paddle_output, torch_output = process_output(self.api_config, paddle_output, torch_output)
@@ -294,7 +307,13 @@ class APITestAccuracy(APITestBase):
                               flush=True)
                         write_to_log("accuracy_error", self.api_config.config)
                         return
-                elif (paddle_item is None or not paddle_item._is_initialized()) and torch_item is None:
+                elif (
+                    paddle_item is None
+                    or isinstance(paddle_item, paddle.Tensor)
+                    and not (paddle_item._is_initialized() or paddle_item.numel() == 0)
+                ) and torch_item is None:
+                    # paddle is None and torch is None
+                    # paddle is Tensor but uninitialized and torch is None
                     pass
                 elif not isinstance(paddle_item, paddle.Tensor) or not isinstance(torch_item, torch.Tensor):
                     print(f"[not compare] at {i} {self.api_config.config}\n"
@@ -327,19 +346,23 @@ class APITestAccuracy(APITestBase):
                     print(f"[Pass] {self.api_config.config}", flush=True)
                     write_to_log("pass", self.api_config.config)
                     return
+                if any(cuda_err in str(err) for cuda_err in CUDA_ERROR):
+                    print(f"[cuda error] backward {self.api_config.config}\n{str(err)}", flush=True)
+                    write_to_log("cuda_error", self.api_config.config)
+                    raise
+                if any(cuda_err in str(err) for cuda_err in CUDA_OOM):
+                    print(f"[oom] backward {self.api_config.config}\n{str(err)}", flush=True)
+                    write_to_log("oom", self.api_config.config)
+                    raise
                 print(f"[paddle error] backward {self.api_config.config}\n{str(err)}", flush=True)
                 write_to_log("paddle_error", self.api_config.config)
-                if "CUDA error" in str(err) or "memory corruption" in str(err):
-                    raise err
-                if "CUDA out of memory" in str(err) or "Out of memory error" in str(err):
-                    raise err
                 return
 
             try:
                 paddle.base.core.eager._for_test_check_cuda_error()
             except Exception as err:
                 print(f"[cuda error] backward {self.api_config.config}\n{str(err)}", flush=True)
-                write_to_log("paddle_error", self.api_config.config)
+                write_to_log("cuda_error", self.api_config.config)
                 raise
 
             paddle_out_grads, torch_out_grads = process_grad_output(self.api_config, paddle_out_grads, torch_out_grads)
@@ -370,7 +393,13 @@ class APITestAccuracy(APITestBase):
                 for i, (paddle_item, torch_item) in enumerate(zip(paddle_out_grads, torch_out_grads)):
                     if isinstance(paddle_item, int):
                         self.np_assert_accuracy(numpy.array(paddle_item), numpy.array(torch_item), atol=self.atol, rtol=self.rtol)
-                    elif (paddle_item is None or not paddle_item._is_initialized()) and torch_item is None:
+                    elif (
+                        paddle_item is None
+                        or isinstance(paddle_item, paddle.Tensor)
+                        and not (paddle_item._is_initialized() or paddle_item.numel() == 0)
+                    ) and torch_item is None:
+                        # paddle is None and torch is None
+                        # paddle is Tensor but uninitialized and torch is None
                         pass
                     elif not isinstance(paddle_item, paddle.Tensor) or not isinstance(torch_item, torch.Tensor):
                         print(f"[not compare] backward at {i} {self.api_config.config}\n"

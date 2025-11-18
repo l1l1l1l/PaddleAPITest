@@ -11,6 +11,8 @@ from datetime import datetime
 from multiprocessing import Lock, Manager, cpu_count, set_start_method
 from typing import TYPE_CHECKING
 import subprocess
+
+import numpy as np
 import pynvml
 
 from pebble import ProcessExpired, ProcessPool
@@ -34,6 +36,8 @@ from tester.api_config.log_writer import *
 
 os.environ["FLAGS_use_system_allocator"] = "1"
 os.environ["NVIDIA_TF32_OVERRIDE"] = "0"
+
+VALID_TEST_ARGS = {"test_amp", "test_backward", "atol", "rtol", "test_tol"}
 
 
 def cleanup(pool):
@@ -101,10 +105,23 @@ def validate_gpu_options(options) -> tuple:
         raise ValueError("No devices found")
     if options.gpu_ids:
         try:
-            gpu_ids = [int(id) for id in options.gpu_ids.split(",") if id.strip()]
-        except ValueError as e:
+            gpu_ids = []
+            for part in options.gpu_ids.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if part.startswith("-") and part[1:].isdigit():
+                    gpu_ids.append(int(part))
+                elif "-" in part and not part.startswith("-"):
+                    start, end = map(int, part.split("-"))
+                    if start > end:
+                        raise ValueError(f"Invalid range: {part} (start > end)")
+                    gpu_ids.extend(range(start, end + 1))
+                else:
+                    gpu_ids.append(int(part))
+        except ValueError:
             raise ValueError(
-                f"Invalid gpu_ids: {options.gpu_ids} (int expected)"
+                f"Invalid gpu_ids: {options.gpu_ids} (int or range expected)"
             ) from None
         if len(gpu_ids) != len(set(gpu_ids)):
             raise ValueError(f"Invalid gpu_ids: {options.gpu_ids} (duplicates)")
@@ -402,10 +419,12 @@ def run_test_case(api_config_str, options):
     try:
         case.test()
     except Exception as err:
-        if "CUDA out of memory" in str(err) or "Out of memory error" in str(err):
-            os._exit(99)
+        # if fatal error happens, subprocess need to exit with non-zero status
         if "CUDA error" in str(err) or "memory corruption" in str(err):
-            os._exit(1)
+            os._exit(99)
+        if "CUDA out of memory" in str(err) or "Out of memory error" in str(err):
+            os._exit(98)
+        # if not fatal error, subprocess will be alive and report error
         print(f"[test error] {api_config_str}: {err}", flush=True)
         raise
     finally:
@@ -507,7 +526,8 @@ def main():
         "--gpu_ids",
         type=str,
         default="",
-        help="Comma-separated list of GPU IDs to use (e.g., 0,1,2), -1 for all available",
+        help="GPU IDs to use ('-1' for all available). "
+        "Accepts comma-separated values and/or ranges (e.g., '0-3,6,7')",
     )
     parser.add_argument(
         "--required_memory",
@@ -544,10 +564,37 @@ def main():
         "--test_tol",
         type=parse_bool,
         default=False,
-        help="Whether to test tolerance range in accuracy",
+        help="Whether to test tolerance range in accuracy mode",
     )
+    parser.add_argument(
+        "--test_backward",
+        type=parse_bool,
+        default=False,
+        help="Whether to test backward in paddle_cinn mode",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=1800,
+        help="Timeout setting for a single test case, in seconds",
+    )
+    parser.add_argument(
+        "--show_runtime_status",
+        type=parse_bool,
+        default=True,
+        help="Whether to show the current test progress in real-time. If set to False, only failed cases will be output",
+    )
+    parser.add_argument(
+        "--random_seed",
+        type=int,
+        default=0,
+        help="The numpy random seed ",
+    )
+
     options = parser.parse_args()
     print(f"Options: {vars(options)}", flush=True)
+    if options.random_seed != parser.get_default("random_seed"):
+        np.random.seed(options.random_seed)
 
     mode = [
         options.accuracy,
@@ -576,6 +623,8 @@ def main():
         return
     if options.test_tol and not options.accuracy:
         print(f"--test_tol takes effect when --accuracy is True.", flush=True)
+    if options.test_backward and not options.paddle_cinn:
+        print(f"--test_backward takes effect when --paddle_cinn is True.", flush=True)
     os.environ["USE_CACHED_NUMPY"] = str(options.use_cached_numpy)
 
     if options.log_dir:
@@ -698,7 +747,6 @@ def main():
         api_config_count = len(api_configs)
         api_configs = sorted(api_configs - finish_configs)
         all_case = len(api_configs)
-        fail_case = 0
         finish_case = api_config_count - all_case
         if finish_case:
             print(finish_case, "cases already tested.", flush=True)
@@ -755,14 +803,15 @@ def main():
         signal.signal(signal.SIGTERM, cleanup_handler)
 
         # batch test
+        tested_case = 0
         try:
             BATCH_SIZE = 20000
-            i = 0
             for batch_start in range(0, len(api_configs), BATCH_SIZE):
                 batch = api_configs[batch_start : batch_start + BATCH_SIZE]
                 futures = {}
                 for config in batch:
-                    timeout = estimate_timeout(config)
+                    # timeout = estimate_timeout(config)
+                    timeout = options.timeout
                     future = pool.schedule(
                         run_test_case,
                         [config, options],
@@ -773,20 +822,35 @@ def main():
                 for future in as_completed(futures):
                     config = futures[future]
                     try:
-                        i += 1
-                        print(f"[{i}/{all_case}] Testing {config}", flush=True)
+                        tested_case += 1
+                        if options.show_runtime_status:
+                            print(
+                                f"[{tested_case}/{all_case}] Testing {config}",
+                                flush=True,
+                            )
                         future.result()
-                        print(f"[info] Test case succeeded for {config}", flush=True)
+                        if options.show_runtime_status:
+                            print(
+                                f"[info] Test case succeeded for {config}", flush=True
+                            )
                     except TimeoutError as err:
                         write_to_log("timeout", config)
                         print(
                             f"[error] Test case timed out for {config}: {err}",
                             flush=True,
                         )
-                        fail_case += 1
                     except ProcessExpired as err:
+                        # we have catched 99 and 98 error in test class, so we only print info here
+                        # when any cuda error and oom happen, subprocess will crash too,
+                        # these case has been classified to oom and cuda_error and won't be classified to crash
                         if err.exitcode == 99:
-                            write_to_log("oom", config)
+                            # write_to_log("cuda_error", config)
+                            print(
+                                f"[error] CUDA error for {config}: {err}",
+                                flush=True,
+                            )
+                        elif err.exitcode == 98:
+                            # write_to_log("oom", config)
                             print(
                                 f"[error] CUDA out of memory for {config}",
                                 flush=True,
@@ -797,14 +861,12 @@ def main():
                                 f"[fatal] Worker crashed for {config}: {err}",
                                 flush=True,
                             )
-                        fail_case += 1
                     except Exception as err:
                         print(
                             f"[warn] Test case failed for {config}: {err}",
                             flush=True,
                         )
                 aggregate_logs()
-            print(f"{all_case} cases tested, {fail_case} failed.", flush=True)
             pool.close()
             pool.join()
         except Exception as e:
@@ -813,6 +875,7 @@ def main():
             total_time = time.time() - start_time
             print(f"Test time: {round(total_time/60, 3)} minutes.", flush=True)
         finally:
+            print(f"{tested_case} cases have been tested.", flush=True)
             log_counts = aggregate_logs(end=True)
             print_log_info(all_case, log_counts)
             end_time = time.time()

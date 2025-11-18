@@ -14,7 +14,7 @@ TEST_LOG_PATH = DIR_PATH / "tester/api_config/test_log"
 TEST_LOG_PATH.mkdir(parents=True, exist_ok=True)
 TMP_LOG_PATH = TEST_LOG_PATH / ".tmp"
 
-# 日志类型和对应的文件
+# 日志类型和对应的文件，可在下方进行注册
 LOG_PREFIXES = {
     "checkpoint": "checkpoint",
     "pass": "api_config_pass",
@@ -27,6 +27,8 @@ LOG_PREFIXES = {
     "timeout": "api_config_timeout",
     "crash": "api_config_crash",
     "oom": "api_config_oom",
+    "match_error": "api_config_match_error",
+    "cuda_error": "api_config_cuda_error",
 }
 
 _is_engineV2 = False
@@ -167,7 +169,10 @@ def aggregate_logs(end=False):
             all_success = False
         else:
             for file_path in log_files:
-                file_path.unlink()
+                if end:
+                    file_path.unlink()
+                else:
+                    file_path.write_bytes(b"")
 
     log_success = True
     log_file = TEST_LOG_PATH / f"log_inorder.log"
@@ -183,11 +188,11 @@ def aggregate_logs(end=False):
                             if not lines:
                                 break
                             for line in lines:
-                                if len(line) > 10000:  # 如果行长度超过10000字节，截断
-                                    print(
-                                        f"Truncating long line ({len(line)} bytes) in {file_path.name}"
-                                    )
-                                    out_f.write(line[:10000] + b"\n")
+                                if len(line) > 200000:  # 如果行长度超过200000字节,截断
+                                    # print(
+                                    #     f"Truncating long line ({len(line)} bytes) in {file_path.name}"
+                                    # )
+                                    out_f.write(line[:200000] + b"\n")
                                 else:
                                     out_f.write(line)
                 except Exception as err:
@@ -247,7 +252,10 @@ def aggregate_logs(end=False):
             all_success = False
         else:
             for file_path in tmp_tol_files:
-                file_path.unlink()
+                if end:
+                    file_path.unlink()
+                else:
+                    file_path.write_bytes(b"")
 
     stable_success = True
     stable_file = TEST_LOG_PATH / f"stable.csv"
@@ -288,7 +296,10 @@ def aggregate_logs(end=False):
             all_success = False
         else:
             for file_path in tmp_stable_files:
-                file_path.unlink()
+                if end:
+                    file_path.unlink()
+                else:
+                    file_path.write_bytes(b"")
 
     if end:
         if all_success and not os.listdir(TMP_LOG_PATH):
@@ -354,8 +365,28 @@ def aggregate_logs(end=False):
 def print_log_info(all_case, log_counts={}):
     """打印日志统计信息"""
     test_case = log_counts.get("checkpoint", 0)
-    fail_case = log_counts.get("crash", 0) + log_counts.get("timeout", 0)
-    skip_case = log_counts.get("skip", 0)
+    pass_case = log_counts.get("pass", 0)
+    fail_case = sum(
+        log_counts.get(log_type, 0)
+        for log_type in [
+            "paddle_error",
+            "accuracy_error",
+            "accuracy_diff",
+            "timeout",
+            "crash",
+            "oom",
+            "cuda_error",
+        ]
+    )
+    skip_case = sum(
+        log_counts.get(log_type, 0)
+        for log_type in [
+            "numpy_error",
+            "torch_error",
+            "paddle_to_torch_failed",
+            "match_error",
+        ]
+    )
 
     # 打印统计信息
     print("\n" + "=" * 50)
@@ -363,6 +394,7 @@ def print_log_info(all_case, log_counts={}):
     print("=" * 50)
     print(f"{'Total cases':<30}: {all_case}")
     print(f"{'Tested cases':<30}: {test_case}")
+    print(f"{'Passed cases':<30}: {pass_case}")
     print(f"{'Failed cases':<30}: {fail_case}")
     print(f"{'Skipped cases':<30}: {skip_case}")
     if log_counts:
