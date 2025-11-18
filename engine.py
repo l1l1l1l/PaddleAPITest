@@ -8,12 +8,7 @@ from datetime import datetime
 
 import paddle
 
-try:
-    import torch
-    TORCH_AVAILABLE = True
-except ImportError:
-    torch = None
-    TORCH_AVAILABLE = False
+import torch
 
 from tester import (APIConfig, set_cfg)
 from tester.api_config.log_writer import (close_process_files, read_log,
@@ -122,15 +117,9 @@ def main():
         from tester import APITestPaddleGPUPerformance
         test_class = APITestPaddleGPUPerformance
     elif options.torch_gpu_performance:
-        if not TORCH_AVAILABLE:
-            print("Error: torch is not available but --torch_gpu_performance was specified")
-            return
         from tester import APITestTorchGPUPerformance
         test_class = APITestTorchGPUPerformance
     elif options.paddle_torch_gpu_performance:
-        if not TORCH_AVAILABLE:
-            print("Error: torch is not available but --paddle_torch_gpu_performance was specified")
-            return
         paddle.set_flags({"FLAGS_use_system_allocator": False})
         paddle.framework.set_flags({"FLAGS_share_tensor_for_grad_tensor_holder": True})
         from tester import APITestPaddleTorchGPUPerformance
@@ -173,8 +162,7 @@ def main():
             and not options.torch_gpu_performance
             and not options.paddle_torch_gpu_performance
         ):
-            if TORCH_AVAILABLE:
-                torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
             paddle.device.cuda.empty_cache()
     elif options.api_config_file != "":
         finish_configs = read_log("checkpoint")
@@ -219,8 +207,7 @@ def main():
                 and not options.torch_gpu_performance
                 and not options.paddle_torch_gpu_performance
             ):
-                if TORCH_AVAILABLE:
-                    torch.cuda.empty_cache()
+                torch.cuda.empty_cache()
                 paddle.device.cuda.empty_cache()
 
         # elif options.api_config_file != "":

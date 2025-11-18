@@ -7,12 +7,7 @@ import re
 import numpy
 import paddle
 
-try:
-    import torch
-    TORCH_AVAILABLE = True
-except ImportError:
-    torch = None
-    TORCH_AVAILABLE = False
+import torch
 
 USE_CACHED_NUMPY = os.getenv("USE_CACHED_NUMPY", "False").lower() == "true"
 cached_numpy = {}
@@ -98,8 +93,6 @@ class TensorConfig:
         return f'Tensor({self.shape},"{self.dtype}")'
 
     def convert_dtype_to_torch_type(self, dtype):
-        if not TORCH_AVAILABLE:
-            raise RuntimeError("torch is not available but convert_dtype_to_torch_type was called")
         if dtype in ["float32", numpy.float32]:
             return torch.float32
         elif dtype in ['float16', numpy.float16]:
@@ -2037,8 +2030,6 @@ class TensorConfig:
         return self.paddle_tensor
 
     def get_torch_tensor(self, api_config):
-        if not TORCH_AVAILABLE:
-            raise RuntimeError("torch is not available but get_torch_tensor was called")
         if self.dtype in ["float8_e5m2", "float8_e4m3fn"]:
             print("Warning ", self.dtype, "not supported")
             return
@@ -2061,8 +2052,7 @@ class TensorConfig:
         self.torch_tensor = None
         self.paddle_tensor = None
         self.numpy_tensor = None
-        if TORCH_AVAILABLE:
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
         paddle.device.cuda.empty_cache()
 
     def clear_paddle_tensor(self):
@@ -2077,8 +2067,7 @@ class TensorConfig:
     def clear_torch_tensor(self):
         del self.torch_tensor
         self.torch_tensor = None
-        if TORCH_AVAILABLE:
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
     def fill_numpy_tensor(self, full_value):
         self.numpy_tensor = numpy.full(shape=self.shape, fill_value=full_value, dtype=self.dtype)
