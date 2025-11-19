@@ -75,9 +75,10 @@ def close_process_files():
             try:  
                 fd = handler.fileno()  
                 os.fstat(fd)
-            except (OSError, ValueError) as e:  
-                if isinstance(e, OSError) and e.errno == errno.EBADF:  
-                    continue              
+            except OSError as e:
+                if e.errno == errno.EBADF:
+                    continue
+                raise
             handler.close()
         except Exception as err:
             print(f"Error closing process file: {err}", flush=True)
