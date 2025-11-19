@@ -14,7 +14,6 @@ import subprocess
 
 import numpy as np
 import pynvml
-
 from pebble import ProcessExpired, ProcessPool
 
 if TYPE_CHECKING:
@@ -79,8 +78,29 @@ def estimate_timeout(api_config) -> float:
     # return TIMEOUT_STEPS[-1][1]
     return 1800
 
-def get_device_count() -> int:
+def get_device_type() -> str:
+    """Detect the current device type (gpu, xpu, or cpu)."""
+    if shutil.which("nvidia-smi"):
+        try:
+            out = subprocess.check_output(["nvidia-smi", "-L"], text=True)
+            if any(line.strip().startswith("GPU ") for line in out.splitlines()):
+                return "gpu"
+        except Exception:
+            pass
     if shutil.which("xpu-smi"):
+        try:
+            out = subprocess.check_output(["xpu-smi"], text=True, stderr=subprocess.STDOUT)
+            if any(re.match(r"^\|\s*\d+\s+\S", line) for line in out.splitlines()):
+                return "xpu"
+        except Exception:
+            pass
+    return "cpu"
+
+def get_device_count() -> int:
+    """Get the number of available devices (GPUs or XPUs)."""
+    device_type = get_device_type()
+    
+    if device_type == "xpu":
         out = subprocess.check_output(["xpu-smi"], text=True, stderr=subprocess.STDOUT)
         ids = set()
         for line in out.splitlines():
@@ -90,11 +110,10 @@ def get_device_count() -> int:
             if m:
                 ids.add(int(m.group(1)))
         return len(ids)
-
-    if shutil.which("nvidia-smi"):
+    elif device_type == "gpu":
         out = subprocess.check_output(["nvidia-smi", "-L"], text=True)
         return sum(1 for l in out.splitlines() if l.startswith("GPU "))
-
+    
     return 0
 
 
@@ -163,30 +182,19 @@ def parse_bool(value):
     else:
         raise ValueError(f"Invalid boolean value: {value} parsed from command line")
 
-def _run_cmd(cmd: list[str]) -> str:
-    """Run a shell command and return stdout as text."""
-    return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
-
-def is_gpu_env() -> bool:
-    """Detect whether NVIDIA GPU environment is present (via `nvidia-smi`)."""
-    if not shutil.which("nvidia-smi"):
-        return False
-    try:
-        out = _run_cmd(["nvidia-smi", "-L"])
-        return any(line.strip().startswith("GPU ") for line in out.splitlines())
-    except Exception:
-        return False
-
 def get_memory_info(gpu_id):
     """Return (total_memory, used_memory) in GB for GPU (NVIDIA) or XPU."""
-    if is_gpu_env():
-        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
-        mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        return int(mem_info.total) / (1024**3), int(mem_info.used) / (1024**3)
-    else:
-        if not shutil.which("xpu-smi"):
-            raise RuntimeError("Neither NVIDIA GPU nor XPU environment detected.")
-        out = _run_cmd(["xpu-smi"])
+    device_type = get_device_type()
+    if device_type == "gpu":
+        pynvml.nvmlInit()
+        try:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            return int(mem_info.total) / (1024**3), int(mem_info.used) / (1024**3)
+        finally:
+            pynvml.nvmlShutdown()
+    elif device_type == "xpu":
+        out = subprocess.check_output(["xpu-smi"], text=True, stderr=subprocess.STDOUT)
         lines = out.splitlines()
         for i, line in enumerate(lines):
             if re.match(rf"^\|\s*{gpu_id}\s+\S", line):
@@ -198,6 +206,8 @@ def get_memory_info(gpu_id):
                         return total_mib / 1024.0, used_mib / 1024.0
                 break
         raise RuntimeError(f"Failed to parse xpu-smi memory for device {gpu_id}")
+    else:
+        raise RuntimeError("Neither NVIDIA GPU nor XPU environment detected.")
 
 def check_gpu_memory(
     gpu_ids, num_workers_per_gpu, required_memory
@@ -205,28 +215,23 @@ def check_gpu_memory(
     assert isinstance(gpu_ids, tuple) and len(gpu_ids) > 0
     available_gpus = []
     max_workers_per_gpu = {}
-    if is_gpu_env():
-        pynvml.nvmlInit()
-    try:
-        for gpu_id in gpu_ids:
-            try:
-                total_memory, used_memory = get_memory_info(gpu_id)
-                free_memory = total_memory - used_memory
-                max_workers = int(free_memory // required_memory)
+    
+    for gpu_id in gpu_ids:
+        try:
+            total_memory, used_memory = get_memory_info(gpu_id)
+            free_memory = total_memory - used_memory
+            max_workers = int(free_memory // required_memory)
 
-                if max_workers >= 1:
-                    available_gpus.append(gpu_id)
-                    max_workers_per_gpu[gpu_id] = (
-                        max_workers
-                        if num_workers_per_gpu == -1
-                        else min(max_workers, num_workers_per_gpu)
-                    )
-            except Exception as e:
-                print(f"[WARNING] Failed to check device {gpu_id}: {str(e)}", flush=True)
-                continue
-    finally:
-        if is_gpu_env():
-            pynvml.nvmlShutdown()
+            if max_workers >= 1:
+                available_gpus.append(gpu_id)
+                max_workers_per_gpu[gpu_id] = (
+                    max_workers
+                    if num_workers_per_gpu == -1
+                    else min(max_workers, num_workers_per_gpu)
+                )
+        except Exception as e:
+            print(f"[WARNING] Failed to check device {gpu_id}: {str(e)}", flush=True)
+            continue
 
     return available_gpus, max_workers_per_gpu
 
@@ -346,30 +351,24 @@ def run_test_case(api_config_str, options):
         f"{datetime.now()} GPU {gpu_id} {os.getpid()} test begin: {api_config_str}",
         flush=True,
     )
-    if is_gpu_env():
-        pynvml.nvmlInit()
-    try:
-        while True:
-            try:
-                total_memory, used_memory = get_memory_info(gpu_id)
-                free_memory = total_memory - used_memory
-                
-                if free_memory >= options.required_memory:
-                    break
+    while True:
+        try:
+            total_memory, used_memory = get_memory_info(gpu_id)
+            free_memory = total_memory - used_memory
+            
+            if free_memory >= options.required_memory:
+                break
 
-                print(
-                    f"{datetime.now()} Device {gpu_id} Free: {free_memory:.1f} GB, "
-                    f"Required: {options.required_memory:.1f} GB. ",
-                    "Waiting for available memory...",
-                    flush=True,
-                )
-                time.sleep(60)
-            except Exception as e:
-                print(f"[WARNING] Failed to check device memory: {str(e)}", flush=True)
-                time.sleep(60)
-    finally:
-        if is_gpu_env():
-            pynvml.nvmlShutdown()
+            print(
+                f"{datetime.now()} Device {gpu_id} Free: {free_memory:.1f} GB, "
+                f"Required: {options.required_memory:.1f} GB. ",
+                "Waiting for available memory...",
+                flush=True,
+            )
+            time.sleep(60)
+        except Exception as e:
+            print(f"[WARNING] Failed to check device memory: {str(e)}", flush=True)
+            time.sleep(60)
     try:
         api_config = APIConfig(api_config_str)
     except Exception as err:

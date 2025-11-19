@@ -7,7 +7,6 @@ import argparse
 from datetime import datetime
 
 import paddle
-
 import torch
 
 from tester import (APIConfig, set_cfg)

@@ -6,7 +6,6 @@ import re
 
 import numpy
 import paddle
-
 import torch
 
 USE_CACHED_NUMPY = os.getenv("USE_CACHED_NUMPY", "False").lower() == "true"

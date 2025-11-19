@@ -4,7 +4,6 @@ import inspect
 import numpy
 import paddle
 import torch
-
 import yaml
 
 from .api_config import USE_CACHED_NUMPY, TensorConfig, cached_numpy
