@@ -154,7 +154,7 @@ python engine.py --api_config_file=/host_home/wanghuan29/PaddleAPITest/tester/ap
 
 当测试配置中有**精度不统一**的情况，需要精度转换时，直接运行测试可能会报错，可加入`--test_amp=True`。  
 
-如果希望在引发`paddle_error` 错误时退出测试，可加入`--exit_on_paddle_error=True`,此时测试进程`exit_code`为1。
+如果希望在引发`paddle_error`或者`accuracy_error` 错误时退出测试，可加入`--exit_on_error=True`,此时测试进程`exit_code`为1。
 
 #### B. engineV2
 
